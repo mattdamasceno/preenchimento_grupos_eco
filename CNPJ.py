@@ -3,7 +3,6 @@
 import streamlit as st
 import pandas as pd
 import os
-import dotenv
 import requests
 import re
 import time
@@ -11,9 +10,6 @@ from datetime import datetime
 import google.generativeai as genai
 import json
 import io
-
-# Carregar variáveis de ambiente
-dotenv.load_dotenv()
 
 # Configuração da página
 st.set_page_config(
@@ -213,7 +209,7 @@ def main():
     # Sidebar
     with st.sidebar:
         
-        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        gemini_key = st.secrets["GEMINI_API_KEY"]
         st.markdown("---")
         st.markdown("**📋 Como usar:**")
         st.markdown("1. Faça upload da planilha Excel")
