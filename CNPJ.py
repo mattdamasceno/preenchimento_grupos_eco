@@ -78,8 +78,162 @@ class GrupoEconomicoApp:
         
         return None
     
-    def identificar_grupo(self, empresa_data: dict, gemini_key: str = None):
-        """Identifica grupo econômico"""
+    def consultar_perplexity(self, empresa_data: dict, perplexity_key: str):
+        """Consulta a API do Perplexity Pro"""
+        try:
+            url = "https://api.perplexity.ai/chat/completions"
+            
+            payload = {
+                "model": "llama-3.1-sonar-large-128k-online",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Você é um especialista em análise de grupos econômicos brasileiros. Responda sempre em formato JSON."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""Identifique o grupo econômico da empresa brasileira:
+Razão Social: {empresa_data.get('razao_social', '')}
+Nome Fantasia: {empresa_data.get('nome_fantasia', '')}
+
+Instruções:
+1. Use similaridade semântica, fonética e histórica
+2. Considere abreviações, fusões, controladoras e subsidiárias
+3. Pesquise informações atualizadas sobre essa empresa
+4. Se não houver vínculo claro, classifique como "INDEPENDENTE"
+
+Responda APENAS com JSON no formato:
+{{"grupo_economico": "NOME_GRUPO ou INDEPENDENTE", "confianca": 80, "justificativa": "breve explicação"}}"""
+                    }
+                ],
+                "temperature": 0.3,
+                "max_tokens": 500
+            }
+            
+            headers = {
+                "Authorization": f"Bearer {perplexity_key}",
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result['choices'][0]['message']['content']
+                
+                # Extrair JSON da resposta
+                json_match = re.search(r'\{.*?\}', content, re.DOTALL)
+                if json_match:
+                    perplexity_result = json.loads(json_match.group())
+                    return {
+                        'grupo_economico': perplexity_result.get('grupo_economico', 'INDEPENDENTE'),
+                        'confianca': perplexity_result.get('confianca', 70),
+                        'justificativa': perplexity_result.get('justificativa', ''),
+                        'metodo': 'Perplexity Pro'
+                    }
+        except Exception as e:
+            print(f"Erro Perplexity: {e}")
+        
+        return None
+    
+    def consultar_gemini(self, empresa_data: dict, gemini_key: str):
+        """Consulta a API do Gemini"""
+        try:
+            genai.configure(api_key=gemini_key)
+            
+            for modelo in ['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-1.5-pro']:
+                try:
+                    model = genai.GenerativeModel(modelo)
+                    prompt = f"""
+Identifique o grupo econômico da empresa brasileira:
+Razão Social: {empresa_data.get('razao_social', '')}
+Nome Fantasia: {empresa_data.get('nome_fantasia', '')}
+
+Instruções:
+1. Use similaridade semântica, fonética e histórica
+2. Considere abreviações, fusões, controladoras e subsidiárias
+3. Se não houver vínculo claro, classifique como "INDEPENDENTE"
+
+Resposta em JSON:
+{{"grupo_economico": "NOME_GRUPO ou INDEPENDENTE", "confianca": 80, "justificativa": "breve explicação"}}
+                    """
+                    
+                    response = model.generate_content(prompt)
+                    json_match = re.search(r'\{.*?\}', response.text, re.DOTALL)
+                    
+                    if json_match:
+                        gemini_result = json.loads(json_match.group())
+                        return {
+                            'grupo_economico': gemini_result.get('grupo_economico', 'INDEPENDENTE'),
+                            'confianca': gemini_result.get('confianca', 70),
+                            'justificativa': gemini_result.get('justificativa', ''),
+                            'metodo': f'Gemini ({modelo})'
+                        }
+                    break
+                except:
+                    continue
+        except Exception as e:
+            print(f"Erro Gemini: {e}")
+        
+        return None
+    
+    def decidir_melhor_resposta(self, gemini_result, perplexity_result, empresa_data: dict, gemini_key: str):
+        """Usa o Gemini para decidir qual das duas respostas é melhor"""
+        try:
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            
+            prompt = f"""
+Você precisa decidir qual das duas análises sobre grupo econômico é mais precisa.
+
+EMPRESA:
+Razão Social: {empresa_data.get('razao_social', '')}
+Nome Fantasia: {empresa_data.get('nome_fantasia', '')}
+
+ANÁLISE 1 (Gemini):
+Grupo: {gemini_result.get('grupo_economico', 'N/A')}
+Confiança: {gemini_result.get('confianca', 0)}%
+Justificativa: {gemini_result.get('justificativa', 'N/A')}
+
+ANÁLISE 2 (Perplexity):
+Grupo: {perplexity_result.get('grupo_economico', 'N/A')}
+Confiança: {perplexity_result.get('confianca', 0)}%
+Justificativa: {perplexity_result.get('justificativa', 'N/A')}
+
+Avalie qual análise é mais precisa e confiável. Considere:
+1. Consistência com dados públicos
+2. Nível de confiança apresentado
+3. Qualidade da justificativa
+4. Informações mais atualizadas
+
+Responda APENAS com JSON:
+{{"escolha": "gemini" ou "perplexity", "razao": "explicação breve da escolha"}}
+            """
+            
+            response = model.generate_content(prompt)
+            json_match = re.search(r'\{.*?\}', response.text, re.DOTALL)
+            
+            if json_match:
+                decisao = json.loads(json_match.group())
+                escolha = decisao.get('escolha', 'gemini').lower()
+                razao = decisao.get('razao', '')
+                
+                if escolha == 'perplexity' and perplexity_result:
+                    resultado = perplexity_result.copy()
+                    resultado['decisao'] = f"Perplexity escolhido - {razao}"
+                    return resultado
+                else:
+                    resultado = gemini_result.copy()
+                    resultado['decisao'] = f"Gemini escolhido - {razao}"
+                    return resultado
+        except:
+            pass
+        
+        # Fallback: usar Gemini se decisão falhar
+        return gemini_result if gemini_result else perplexity_result
+    
+    def identificar_grupo(self, empresa_data: dict, gemini_key: str = None, perplexity_key: str = None):
+        """Identifica grupo econômico consultando ambas APIs"""
         razao = empresa_data.get('razao_social', '').lower()
         fantasia = empresa_data.get('nome_fantasia', '').lower()
         
@@ -90,58 +244,43 @@ class GrupoEconomicoApp:
                     return {
                         'grupo_economico': grupo,
                         'confianca': 85,
-                        'metodo': 'Regras'
+                        'metodo': 'Regras',
+                        'decisao': 'Match direto por palavra-chave'
                     }
         
-        # Tentar Gemini se disponível
+        # Consultar ambas APIs se disponíveis
+        gemini_result = None
+        perplexity_result = None
+        
         if gemini_key:
-            try:
-                genai.configure(api_key=gemini_key)
-                
-                for modelo in ['gemini-2.5-flash', 'gemini-2.5-pro']:
-                    try:
-                        model = genai.GenerativeModel(modelo)
-                        prompt = f"""
-Identifique o grupo econômico da empresa brasileira:
-Razão Social: {empresa_data.get('razao_social', '')}
-Nome Fantasia: {empresa_data.get('nome_fantasia', '')}
-
-Instruções:
-1. Use similaridade semântica, fonética e histórica. Considere empresas com nomes parecidos, abreviações, fusões, controladoras, holdings ou subsidiárias.  
-2. Considere também nomes antigos, versões em inglês e variações regionais (ex: "Volkswagen" ≈ "VW", "Ambev" ≈ "Brahma", "Skol").  
-3. Se o nome indicar pertencimento evidente (ex: “Grupo Pão de Açúcar”, “Raia Drogasil S/A”, “Santander Brasil”), relacione diretamente ao grupo.  
-4. Caso existam indícios (como nomes compostos, siglas conhecidas ou relação histórica), atribua o grupo com nível de confiança ajustado.  
-5. Use o CNPJ apenas como dado contextual, não como chave principal.  
-6. Classifique como “INDEPENDENTE” apenas se não houver **nenhum** indício razoável de vínculo a grupo econômico.
-
-Resposta em JSON:
-{{"grupo_economico": "NOME_GRUPO ou INDEPENDENTE", "confianca": 80}}
-                        """
-                        
-                        response = model.generate_content(prompt)
-                        json_match = re.search(r'\{.*?\}', response.text, re.DOTALL)
-                        
-                        if json_match:
-                            result = json.loads(json_match.group())
-                            return {
-                                'grupo_economico': result.get('grupo_economico', 'INDEPENDENTE'),
-                                'confianca': result.get('confianca', 70),
-                                'metodo': f'Gemini ({modelo})'
-                            }
-                        break
-                    except:
-                        continue
-            except:
-                pass
+            gemini_result = self.consultar_gemini(empresa_data, gemini_key)
+        
+        if perplexity_key:
+            perplexity_result = self.consultar_perplexity(empresa_data, perplexity_key)
+        
+        # Se ambos retornaram resultados, deixar Gemini decidir
+        if gemini_result and perplexity_result:
+            resultado_final = self.decidir_melhor_resposta(
+                gemini_result, perplexity_result, empresa_data, gemini_key
+            )
+            return resultado_final
+        
+        # Se apenas um retornou, usar esse
+        if gemini_result:
+            return gemini_result
+        
+        if perplexity_result:
+            return perplexity_result
         
         # Fallback
         return {
             'grupo_economico': 'INDEPENDENTE',
             'confianca': 50,
-            'metodo': 'Padrão'
+            'metodo': 'Padrão',
+            'decisao': 'Nenhuma API disponível'
         }
     
-    def processar_planilha(self, df: pd.DataFrame, cnpj_col: str, gemini_key: str = None):
+    def processar_planilha(self, df: pd.DataFrame, cnpj_col: str, gemini_key: str = None, perplexity_key: str = None):
         """Processa planilha com CNPJs"""
         resultados = []
         progress_bar = st.progress(0)
@@ -157,7 +296,7 @@ Resposta em JSON:
             # Inicializar resultado base
             resultado = {
                 'cnpj_original': cnpj,
-                'erro': None  # Inicializar sempre como None
+                'erro': None
             }
             
             # Validar CNPJ
@@ -169,8 +308,8 @@ Resposta em JSON:
                 empresa_data = self.buscar_cnpj(cnpj)
                 
                 if empresa_data:
-                    # Identificar grupo
-                    grupo_info = self.identificar_grupo(empresa_data, gemini_key)
+                    # Identificar grupo (com ambas APIs)
+                    grupo_info = self.identificar_grupo(empresa_data, gemini_key, perplexity_key)
                     
                     resultado.update({
                         'cnpj': cnpj_limpo,
@@ -179,6 +318,7 @@ Resposta em JSON:
                         'grupo_economico': grupo_info['grupo_economico'],
                         'confianca': grupo_info['confianca'],
                         'metodo_analise': grupo_info['metodo'],
+                        'decisao_ia': grupo_info.get('decisao', ''),
                         'atividade': empresa_data['atividade'],
                         'situacao': empresa_data['situacao']
                     })
@@ -197,7 +337,7 @@ Resposta em JSON:
             
             # Pausa para não sobrecarregar APIs
             if idx < len(df) - 1:
-                time.sleep(1)
+                time.sleep(2)  # Aumentado para 2 segundos devido a duas APIs
         
         progress_bar.empty()
         status_text.empty()
@@ -207,19 +347,26 @@ Resposta em JSON:
 def main():
     st.title("🏢 Identificador de Grupos Econômicos")
     st.markdown("**Upload uma planilha com CNPJs e baixe com os grupos econômicos identificados**")
+    st.info("🤖 Sistema dual: consulta Gemini + Perplexity Pro, com decisão inteligente da melhor resposta")
     
     app = GrupoEconomicoApp()
     
     # Sidebar
     with st.sidebar:
+        gemini_key = st.secrets.get("GEMINI_API_KEY")
+        perplexity_key = st.secrets.get("PERPLEXITY_API_KEY")
         
-        gemini_key = st.secrets["GEMINI_API_KEY"]
+        st.markdown("### 🔑 Status das APIs")
+        st.write(f"Gemini: {'✅' if gemini_key else '❌'}")
+        st.write(f"Perplexity: {'✅' if perplexity_key else '❌'}")
+        
         st.markdown("---")
         st.markdown("**📋 Como usar:**")
         st.markdown("1. Faça upload da planilha Excel")
         st.markdown("2. Selecione a coluna com CNPJs")
         st.markdown("3. Processe e baixe resultado")
-        
+        st.markdown("4. O sistema consulta ambas IAs")
+        st.markdown("5. Gemini decide a melhor resposta")
     
     # Área principal
     col1, col2 = st.columns([3, 1])
@@ -254,13 +401,12 @@ def main():
                 # Botão processar
                 if st.button("🚀 Processar Planilha", type="primary", use_container_width=True):
                     
-                    with st.spinner("Processando CNPJs..."):
-                        df_resultado = app.processar_planilha(df, cnpj_column, gemini_key)
+                    with st.spinner("Processando CNPJs com Gemini + Perplexity..."):
+                        df_resultado = app.processar_planilha(df, cnpj_column, gemini_key, perplexity_key)
                     
                     st.success(f"✅ Processamento concluído!")
                     
                     # Mostrar estatísticas
-                    # Contar sucessos e erros de forma mais segura
                     total_registros = len(df_resultado)
                     registros_com_erro = df_resultado['erro'].notna().sum()
                     sucessos = total_registros - registros_com_erro
@@ -278,7 +424,7 @@ def main():
                     st.header("📊 Resultado")
                     
                     # Colunas principais para visualização
-                    colunas_principais = ['cnpj_original', 'razao_social', 'grupo_economico', 'confianca']
+                    colunas_principais = ['cnpj_original', 'razao_social', 'grupo_economico', 'confianca', 'metodo_analise']
                     colunas_disponiveis = [col for col in colunas_principais if col in df_resultado.columns]
                     
                     if colunas_disponiveis:
@@ -286,7 +432,6 @@ def main():
                     
                     # Gráfico de grupos (se houver sucessos)
                     if sucessos > 0:
-                        # Filtrar apenas registros sem erro de forma mais segura
                         registros_validos = df_resultado[df_resultado['erro'].isna()]
                         
                         if len(registros_validos) > 0 and 'grupo_economico' in registros_validos.columns:
