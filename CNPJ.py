@@ -106,8 +106,6 @@ Identifique o grupo econômico da empresa brasileira:
 Razão Social: {empresa_data.get('razao_social', '')}
 Nome Fantasia: {empresa_data.get('nome_fantasia', '')}
 
-Grupos conhecidos: {list(self.grupos_conhecidos.keys())}
-
 Instruções:
 1. Use similaridade semântica, fonética e histórica. Considere empresas com nomes parecidos, abreviações, fusões, controladoras, holdings ou subsidiárias.  
 2. Considere também nomes antigos, versões em inglês e variações regionais (ex: "Volkswagen" ≈ "VW", "Ambev" ≈ "Brahma", "Skol").  
