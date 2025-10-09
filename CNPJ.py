@@ -13,7 +13,7 @@ import io
 
 # Configuração da página
 st.set_page_config(
-    page_title="🏢 Grupos Econômicos",
+    page_title="Grupos Econômicos",
     page_icon="🏢",
     layout="wide"
 )
@@ -343,11 +343,5 @@ def main():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         
-        st.markdown("---")
-        st.markdown("**🎯 Grupos identificados:**")
-        for grupo in list(app.grupos_conhecidos.keys())[:8]:
-            st.markdown(f"• {grupo}")
-        st.markdown("• E outros...")
-
 if __name__ == "__main__":
     main()
