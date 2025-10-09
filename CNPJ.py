@@ -108,7 +108,13 @@ Nome Fantasia: {empresa_data.get('nome_fantasia', '')}
 
 Grupos conhecidos: {list(self.grupos_conhecidos.keys())}
 
-Busque por similaridade, mesmo que o nome não seja exatamente igual. Busque relações óbvias ou históricas, como "Ambev" para "Brahma" ou "Skol". Use o CNPJ para contexto se necessário, mas não dependa dele. qualquer empresa que não se encaixe em grupos conhecidos deve ser classificada como "INDEPENDENTE", mas apenas em último caso.
+Instruções:
+1. Use similaridade semântica, fonética e histórica. Considere empresas com nomes parecidos, abreviações, fusões, controladoras, holdings ou subsidiárias.  
+2. Considere também nomes antigos, versões em inglês e variações regionais (ex: "Volkswagen" ≈ "VW", "Ambev" ≈ "Brahma", "Skol").  
+3. Se o nome indicar pertencimento evidente (ex: “Grupo Pão de Açúcar”, “Raia Drogasil S/A”, “Santander Brasil”), relacione diretamente ao grupo.  
+4. Caso existam indícios (como nomes compostos, siglas conhecidas ou relação histórica), atribua o grupo com nível de confiança ajustado.  
+5. Use o CNPJ apenas como dado contextual, não como chave principal.  
+6. Classifique como “INDEPENDENTE” apenas se não houver **nenhum** indício razoável de vínculo a grupo econômico.
 
 Resposta em JSON:
 {{"grupo_economico": "NOME_GRUPO ou INDEPENDENTE", "confianca": 80}}
