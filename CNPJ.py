@@ -10,13 +10,44 @@ from datetime import datetime
 import google.generativeai as genai
 import json
 import io
+import logging
+from io import StringIO
 
 # Configuração da página
 st.set_page_config(
-    page_title="Grupos Econômicos",
+    page_title="🏢 Grupos Econômicos",
     page_icon="🏢",
     layout="wide"
 )
+
+# Configurar logging
+class StreamlitLogHandler(logging.Handler):
+    """Handler customizado para exibir logs no Streamlit"""
+    def __init__(self):
+        super().__init__()
+        self.logs = []
+    
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.logs.append({
+            'time': datetime.now().strftime('%H:%M:%S'),
+            'level': record.levelname,
+            'message': log_entry
+        })
+
+# Configurar logger
+logger = logging.getLogger('GrupoEconomicoApp')
+logger.setLevel(logging.DEBUG)
+
+# Handler para Streamlit
+streamlit_handler = StreamlitLogHandler()
+streamlit_handler.setFormatter(logging.Formatter('%(levelname)s - %(message)s'))
+logger.addHandler(streamlit_handler)
+
+# Handler para console (opcional)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(console_handler)
 
 class GrupoEconomicoApp:
     def __init__(self):
@@ -32,13 +63,16 @@ class GrupoEconomicoApp:
             "SUZANO": ["suzano"],
             "GERDAU": ["gerdau"]
         }
+        logger.info(f"App inicializado com {len(self.grupos_conhecidos)} grupos conhecidos")
     
     def buscar_cnpj(self, cnpj: str):
         """Busca dados do CNPJ em APIs públicas"""
         cnpj_limpo = re.sub(r'\D', '', cnpj)
+        logger.debug(f"Buscando CNPJ: {cnpj_limpo}")
         
         # Cache simples
         if f"cnpj_{cnpj_limpo}" in st.session_state:
+            logger.debug(f"CNPJ {cnpj_limpo} encontrado no cache")
             return st.session_state[f"cnpj_{cnpj_limpo}"]
         
         # Tentar APIs
@@ -47,7 +81,10 @@ class GrupoEconomicoApp:
             f"https://brasilapi.com.br/api/cnpj/v1/{cnpj_limpo}"
         ]:
             try:
+                logger.debug(f"Tentando API: {api_url}")
                 response = requests.get(api_url, timeout=10)
+                logger.debug(f"Status da resposta: {response.status_code}")
+                
                 if response.status_code == 200:
                     data = response.json()
                     
@@ -60,8 +97,11 @@ class GrupoEconomicoApp:
                                 'atividade': data.get('atividade_principal', {}).get('text', '') if isinstance(data.get('atividade_principal'), dict) else str(data.get('atividade_principal', '')),
                                 'situacao': data.get('situacao', '')
                             }
+                            logger.info(f"✅ Dados encontrados (ReceitaWS): {result['razao_social']}")
                             st.session_state[f"cnpj_{cnpj_limpo}"] = result
                             return result
+                        else:
+                            logger.warning(f"ReceitaWS retornou status: {data.get('status')}")
                     
                     # Processar Brasil API
                     else:
@@ -71,217 +111,95 @@ class GrupoEconomicoApp:
                             'atividade': data.get('cnae_fiscal_descricao', ''),
                             'situacao': data.get('descricao_situacao_cadastral', '')
                         }
+                        logger.info(f"✅ Dados encontrados (BrasilAPI): {result['razao_social']}")
                         st.session_state[f"cnpj_{cnpj_limpo}"] = result
                         return result
-            except:
+            except Exception as e:
+                logger.error(f"Erro ao buscar em {api_url}: {str(e)}")
                 continue
         
+        logger.warning(f"❌ Nenhuma API retornou dados para CNPJ {cnpj_limpo}")
         return None
     
-    def consultar_perplexity(self, empresa_data: dict, perplexity_key: str):
-        """Consulta a API do Perplexity Pro"""
-        try:
-            url = "https://api.perplexity.ai/chat/completions"
-            
-            payload = {
-                "model": "llama-3.1-sonar-large-128k-online",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "Você é um especialista em análise de grupos econômicos brasileiros. Responda sempre em formato JSON."
-                    },
-                    {
-                        "role": "user",
-                        "content": f"""Identifique o grupo econômico da empresa brasileira:
-Razão Social: {empresa_data.get('razao_social', '')}
-Nome Fantasia: {empresa_data.get('nome_fantasia', '')}
-
-Instruções:
-1. Use similaridade semântica, fonética e histórica
-2. Considere abreviações, fusões, controladoras e subsidiárias
-3. Pesquise informações atualizadas sobre essa empresa
-4. Se não houver vínculo claro, classifique como "INDEPENDENTE"
-
-Responda APENAS com JSON no formato:
-{{"grupo_economico": "NOME_GRUPO ou INDEPENDENTE", "confianca": 80, "justificativa": "breve explicação"}}"""
-                    }
-                ],
-                "temperature": 0.3,
-                "max_tokens": 500
-            }
-            
-            headers = {
-                "Authorization": f"Bearer {perplexity_key}",
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                result = response.json()
-                content = result['choices'][0]['message']['content']
-                
-                # Extrair JSON da resposta
-                json_match = re.search(r'\{.*?\}', content, re.DOTALL)
-                if json_match:
-                    perplexity_result = json.loads(json_match.group())
-                    return {
-                        'grupo_economico': perplexity_result.get('grupo_economico', 'INDEPENDENTE'),
-                        'confianca': perplexity_result.get('confianca', 70),
-                        'justificativa': perplexity_result.get('justificativa', ''),
-                        'metodo': 'Perplexity Pro'
-                    }
-        except Exception as e:
-            print(f"Erro Perplexity: {e}")
-        
-        return None
-    
-    def consultar_gemini(self, empresa_data: dict, gemini_key: str):
-        """Consulta a API do Gemini"""
-        try:
-            genai.configure(api_key=gemini_key)
-            
-            for modelo in ['gemini-2.0-flash-exp', 'gemini-1.5-flash', 'gemini-1.5-pro']:
-                try:
-                    model = genai.GenerativeModel(modelo)
-                    prompt = f"""
-Identifique o grupo econômico da empresa brasileira:
-Razão Social: {empresa_data.get('razao_social', '')}
-Nome Fantasia: {empresa_data.get('nome_fantasia', '')}
-
-Instruções:
-1. Use similaridade semântica, fonética e histórica
-2. Considere abreviações, fusões, controladoras e subsidiárias
-3. Se não houver vínculo claro, classifique como "INDEPENDENTE"
-
-Resposta em JSON:
-{{"grupo_economico": "NOME_GRUPO ou INDEPENDENTE", "confianca": 80, "justificativa": "breve explicação"}}
-                    """
-                    
-                    response = model.generate_content(prompt)
-                    json_match = re.search(r'\{.*?\}', response.text, re.DOTALL)
-                    
-                    if json_match:
-                        gemini_result = json.loads(json_match.group())
-                        return {
-                            'grupo_economico': gemini_result.get('grupo_economico', 'INDEPENDENTE'),
-                            'confianca': gemini_result.get('confianca', 70),
-                            'justificativa': gemini_result.get('justificativa', ''),
-                            'metodo': f'Gemini ({modelo})'
-                        }
-                    break
-                except:
-                    continue
-        except Exception as e:
-            print(f"Erro Gemini: {e}")
-        
-        return None
-    
-    def decidir_melhor_resposta(self, gemini_result, perplexity_result, empresa_data: dict, gemini_key: str):
-        """Usa o Gemini para decidir qual das duas respostas é melhor"""
-        try:
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel('gemini-2.0-flash-exp')
-            
-            prompt = f"""
-Você precisa decidir qual das duas análises sobre grupo econômico é mais precisa.
-
-EMPRESA:
-Razão Social: {empresa_data.get('razao_social', '')}
-Nome Fantasia: {empresa_data.get('nome_fantasia', '')}
-
-ANÁLISE 1 (Gemini):
-Grupo: {gemini_result.get('grupo_economico', 'N/A')}
-Confiança: {gemini_result.get('confianca', 0)}%
-Justificativa: {gemini_result.get('justificativa', 'N/A')}
-
-ANÁLISE 2 (Perplexity):
-Grupo: {perplexity_result.get('grupo_economico', 'N/A')}
-Confiança: {perplexity_result.get('confianca', 0)}%
-Justificativa: {perplexity_result.get('justificativa', 'N/A')}
-
-Avalie qual análise é mais precisa e confiável. Considere:
-1. Consistência com dados públicos
-2. Nível de confiança apresentado
-3. Qualidade da justificativa
-4. Informações mais atualizadas
-
-Responda APENAS com JSON:
-{{"escolha": "gemini" ou "perplexity", "razao": "explicação breve da escolha"}}
-            """
-            
-            response = model.generate_content(prompt)
-            json_match = re.search(r'\{.*?\}', response.text, re.DOTALL)
-            
-            if json_match:
-                decisao = json.loads(json_match.group())
-                escolha = decisao.get('escolha', 'gemini').lower()
-                razao = decisao.get('razao', '')
-                
-                if escolha == 'perplexity' and perplexity_result:
-                    resultado = perplexity_result.copy()
-                    resultado['decisao'] = f"Perplexity escolhido - {razao}"
-                    return resultado
-                else:
-                    resultado = gemini_result.copy()
-                    resultado['decisao'] = f"Gemini escolhido - {razao}"
-                    return resultado
-        except:
-            pass
-        
-        # Fallback: usar Gemini se decisão falhar
-        return gemini_result if gemini_result else perplexity_result
-    
-    def identificar_grupo(self, empresa_data: dict, gemini_key: str = None, perplexity_key: str = None):
-        """Identifica grupo econômico consultando ambas APIs"""
+    def identificar_grupo(self, empresa_data: dict, gemini_key: str = None):
+        """Identifica grupo econômico"""
         razao = empresa_data.get('razao_social', '').lower()
         fantasia = empresa_data.get('nome_fantasia', '').lower()
+        
+        logger.debug(f"Identificando grupo para: {razao} / {fantasia}")
         
         # Análise por regras (sempre funciona)
         for grupo, keywords in self.grupos_conhecidos.items():
             for keyword in keywords:
                 if keyword in razao or keyword in fantasia:
+                    logger.info(f"✅ Grupo identificado por regras: {grupo} (keyword: {keyword})")
                     return {
                         'grupo_economico': grupo,
                         'confianca': 85,
-                        'metodo': 'Regras',
-                        'decisao': 'Match direto por palavra-chave'
+                        'metodo': 'Regras'
                     }
         
-        # Consultar ambas APIs se disponíveis
-        gemini_result = None
-        perplexity_result = None
+        logger.debug("Nenhum grupo identificado por regras, tentando Gemini...")
         
+        # Tentar Gemini se disponível
         if gemini_key:
-            gemini_result = self.consultar_gemini(empresa_data, gemini_key)
-        
-        if perplexity_key:
-            perplexity_result = self.consultar_perplexity(empresa_data, perplexity_key)
-        
-        # Se ambos retornaram resultados, deixar Gemini decidir
-        if gemini_result and perplexity_result:
-            resultado_final = self.decidir_melhor_resposta(
-                gemini_result, perplexity_result, empresa_data, gemini_key
-            )
-            return resultado_final
-        
-        # Se apenas um retornou, usar esse
-        if gemini_result:
-            return gemini_result
-        
-        if perplexity_result:
-            return perplexity_result
+            try:
+                logger.debug("Configurando Gemini API...")
+                genai.configure(api_key=gemini_key)
+                
+                for modelo in ['gemini-2.5-flash', 'gemini-2.5-pro']:
+                    try:
+                        logger.debug(f"Tentando modelo: {modelo}")
+                        model = genai.GenerativeModel(modelo)
+                        prompt = f"""
+Identifique o grupo econômico da empresa brasileira:
+Razão Social: {empresa_data.get('razao_social', '')}
+Nome Fantasia: {empresa_data.get('nome_fantasia', '')}
+
+Grupos conhecidos: {list(self.grupos_conhecidos.keys())}
+
+Busque por similaridade, mesmo que o nome não seja exatamente igual. Busque relações óbvias ou históricas, como "Ambev" para "Brahma" ou "Skol". Use o CNPJ para contexto se necessário, mas não dependa dele. qualquer empresa que não se encaixe em grupos conhecidos deve ser classificada como "INDEPENDENTE", mas apenas em último caso.
+
+Responda APENAS com JSON válido:
+{{"grupo_economico": "NOME_GRUPO ou INDEPENDENTE", "confianca": 80}}
+                        """
+                        
+                        logger.debug("Enviando prompt para Gemini...")
+                        response = model.generate_content(prompt)
+                        logger.debug(f"Resposta do Gemini: {response.text[:200]}...")
+                        
+                        json_match = re.search(r'\{.*?\}', response.text, re.DOTALL)
+                        
+                        if json_match:
+                            result = json.loads(json_match.group())
+                            logger.info(f"✅ Grupo identificado por Gemini ({modelo}): {result.get('grupo_economico')} ({result.get('confianca')}%)")
+                            return {
+                                'grupo_economico': result.get('grupo_economico', 'INDEPENDENTE'),
+                                'confianca': result.get('confianca', 70),
+                                'metodo': f'Gemini ({modelo})'
+                            }
+                        else:
+                            logger.warning(f"Gemini não retornou JSON válido")
+                        break
+                    except Exception as e:
+                        logger.error(f"Erro com modelo {modelo}: {str(e)}")
+                        continue
+            except Exception as e:
+                logger.error(f"Erro ao usar Gemini: {str(e)}")
+        else:
+            logger.warning("Chave do Gemini não fornecida")
         
         # Fallback
+        logger.warning("⚠️ Caindo no fallback - classificando como INDEPENDENTE")
         return {
             'grupo_economico': 'INDEPENDENTE',
             'confianca': 50,
-            'metodo': 'Padrão',
-            'decisao': 'Nenhuma API disponível'
+            'metodo': 'Padrão'
         }
     
-    def processar_planilha(self, df: pd.DataFrame, cnpj_col: str, gemini_key: str = None, perplexity_key: str = None):
+    def processar_planilha(self, df: pd.DataFrame, cnpj_col: str, gemini_key: str = None):
         """Processa planilha com CNPJs"""
+        logger.info(f"Iniciando processamento de {len(df)} CNPJs")
         resultados = []
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -292,6 +210,7 @@ Responda APENAS com JSON:
             status_text.text(f"Processando {idx+1}/{len(df)}: {row[cnpj_col]}")
             
             cnpj = str(row[cnpj_col]).strip()
+            logger.info(f"\n{'='*60}\nProcessando linha {idx+1}: {cnpj}")
             
             # Inicializar resultado base
             resultado = {
@@ -302,14 +221,15 @@ Responda APENAS com JSON:
             # Validar CNPJ
             cnpj_limpo = re.sub(r'\D', '', cnpj)
             if len(cnpj_limpo) != 14:
+                logger.error(f"CNPJ inválido: {cnpj} (tamanho: {len(cnpj_limpo)})")
                 resultado['erro'] = 'CNPJ inválido'
             else:
                 # Buscar dados
                 empresa_data = self.buscar_cnpj(cnpj)
                 
                 if empresa_data:
-                    # Identificar grupo (com ambas APIs)
-                    grupo_info = self.identificar_grupo(empresa_data, gemini_key, perplexity_key)
+                    # Identificar grupo
+                    grupo_info = self.identificar_grupo(empresa_data, gemini_key)
                     
                     resultado.update({
                         'cnpj': cnpj_limpo,
@@ -318,15 +238,16 @@ Responda APENAS com JSON:
                         'grupo_economico': grupo_info['grupo_economico'],
                         'confianca': grupo_info['confianca'],
                         'metodo_analise': grupo_info['metodo'],
-                        'decisao_ia': grupo_info.get('decisao', ''),
                         'atividade': empresa_data['atividade'],
                         'situacao': empresa_data['situacao']
                     })
+                    logger.info(f"✅ Resultado: {grupo_info['grupo_economico']} ({grupo_info['confianca']}%) via {grupo_info['metodo']}")
                 else:
                     resultado.update({
                         'cnpj': cnpj_limpo,
                         'erro': 'Dados não encontrados'
                     })
+                    logger.error(f"❌ Dados não encontrados para CNPJ {cnpj}")
             
             # Adicionar dados originais da planilha
             for col in df.columns:
@@ -337,36 +258,40 @@ Responda APENAS com JSON:
             
             # Pausa para não sobrecarregar APIs
             if idx < len(df) - 1:
-                time.sleep(2)  # Aumentado para 2 segundos devido a duas APIs
+                time.sleep(1)
         
         progress_bar.empty()
         status_text.empty()
+        logger.info(f"Processamento concluído: {len(resultados)} registros")
         
         return pd.DataFrame(resultados)
 
 def main():
     st.title("🏢 Identificador de Grupos Econômicos")
     st.markdown("**Upload uma planilha com CNPJs e baixe com os grupos econômicos identificados**")
-    st.info("🤖 Sistema dual: consulta Gemini + Perplexity Pro, com decisão inteligente da melhor resposta")
     
     app = GrupoEconomicoApp()
     
     # Sidebar
     with st.sidebar:
         gemini_key = st.secrets.get("GEMINI_API_KEY")
-        perplexity_key = st.secrets.get("PERPLEXITY_API_KEY")
         
-        st.markdown("### 🔑 Status das APIs")
-        st.write(f"Gemini: {'✅' if gemini_key else '❌'}")
-        st.write(f"Perplexity: {'✅' if perplexity_key else '❌'}")
+        st.markdown("---")
+        st.markdown("**🐛 Debug**")
+        show_logs = st.checkbox("Mostrar logs detalhados", value=False)
+        
+        if st.button("🗑️ Limpar cache"):
+            for key in list(st.session_state.keys()):
+                if key.startswith('cnpj_'):
+                    del st.session_state[key]
+            st.success("Cache limpo!")
+            logger.info("Cache limpo manualmente")
         
         st.markdown("---")
         st.markdown("**📋 Como usar:**")
         st.markdown("1. Faça upload da planilha Excel")
         st.markdown("2. Selecione a coluna com CNPJs")
         st.markdown("3. Processe e baixe resultado")
-        st.markdown("4. O sistema consulta ambas IAs")
-        st.markdown("5. Gemini decide a melhor resposta")
     
     # Área principal
     col1, col2 = st.columns([3, 1])
@@ -386,6 +311,7 @@ def main():
                 # Ler planilha
                 df = pd.read_excel(uploaded_file)
                 st.success(f"✅ Planilha carregada: {len(df)} linhas, {len(df.columns)} colunas")
+                logger.info(f"Planilha carregada: {len(df)} linhas")
                 
                 # Mostrar preview
                 with st.expander("👁️ Preview da planilha"):
@@ -401,8 +327,8 @@ def main():
                 # Botão processar
                 if st.button("🚀 Processar Planilha", type="primary", use_container_width=True):
                     
-                    with st.spinner("Processando CNPJs com Gemini + Perplexity..."):
-                        df_resultado = app.processar_planilha(df, cnpj_column, gemini_key, perplexity_key)
+                    with st.spinner("Processando CNPJs..."):
+                        df_resultado = app.processar_planilha(df, cnpj_column, gemini_key)
                     
                     st.success(f"✅ Processamento concluído!")
                     
@@ -424,7 +350,7 @@ def main():
                     st.header("📊 Resultado")
                     
                     # Colunas principais para visualização
-                    colunas_principais = ['cnpj_original', 'razao_social', 'grupo_economico', 'confianca', 'metodo_analise']
+                    colunas_principais = ['cnpj_original', 'razao_social', 'grupo_economico', 'confianca']
                     colunas_disponiveis = [col for col in colunas_principais if col in df_resultado.columns]
                     
                     if colunas_disponiveis:
@@ -462,6 +388,7 @@ def main():
                         st.dataframe(df_resultado, use_container_width=True)
                 
             except Exception as e:
+                logger.exception("Erro crítico no processamento")
                 st.error(f"❌ Erro ao processar planilha: {e}")
     
     with col2:
@@ -488,5 +415,51 @@ def main():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         
+        st.markdown("---")
+        st.markdown("**🎯 Grupos identificados:**")
+        for grupo in list(app.grupos_conhecidos.keys())[:8]:
+            st.markdown(f"• {grupo}")
+        st.markdown("• E outros...")
+    
+    # Exibir logs se habilitado
+    if show_logs:
+        st.markdown("---")
+        st.header("🐛 Logs de Debug")
+        
+        if streamlit_handler.logs:
+            # Criar DataFrame com os logs
+            logs_df = pd.DataFrame(streamlit_handler.logs)
+            
+            # Filtros
+            col_filter1, col_filter2 = st.columns(2)
+            with col_filter1:
+                level_filter = st.multiselect(
+                    "Filtrar por nível:",
+                    options=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                    default=['INFO', 'WARNING', 'ERROR']
+                )
+            
+            with col_filter2:
+                search_term = st.text_input("Buscar nos logs:", "")
+            
+            # Aplicar filtros
+            filtered_logs = logs_df[logs_df['level'].isin(level_filter)]
+            if search_term:
+                filtered_logs = filtered_logs[filtered_logs['message'].str.contains(search_term, case=False, na=False)]
+            
+            # Exibir logs
+            st.dataframe(
+                filtered_logs,
+                use_container_width=True,
+                height=400
+            )
+            
+            # Botão para limpar logs
+            if st.button("🗑️ Limpar logs"):
+                streamlit_handler.logs.clear()
+                st.rerun()
+        else:
+            st.info("Nenhum log ainda. Processe uma planilha para ver os logs.")
+
 if __name__ == "__main__":
     main()
