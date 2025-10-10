@@ -147,7 +147,7 @@ class GrupoEconomicoApp:
                 logger.debug("Configurando Gemini API...")
                 genai.configure(api_key=gemini_key)
                 
-                for modelo in ['gemini-2.5-flash', 'gemini-2.5-pro']:
+                for modelo in ['gemini-2.5-pro']:
                     try:
                         logger.debug(f"Tentando modelo: {modelo}")
                         model = genai.GenerativeModel(modelo)
